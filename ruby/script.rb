@@ -1,7 +1,10 @@
 require 'roo'
 require 'spreadsheet'
 
+$VERBOSE = nil
+
 class ExcelTable
+  attr_reader :headers, :xls
 
   def initialize(path)
     @xls = Roo::Spreadsheet.open(path)
@@ -12,20 +15,22 @@ class ExcelTable
     data = []
     data << @headers
     (2..@xls.last_row).each do |row_index|
-      data << @xls.row(row_index)
+      row_data = @xls.row(row_index)
+      data << row_data unless contains_total_or_subtotal?(row_data)
     end
     data
   end
 
   def row(index)
     data = @xls.row(index + 1)
+    return nil if contains_total_or_subtotal?(data)
     Hash[@headers.zip(data)]
   end
 
   def each
     (2..@xls.last_row).each do |row_index|
       data = @xls.row(row_index)
-      yield Hash[@headers.zip(data)]
+      yield Hash[@headers.zip(data)] unless contains_total_or_subtotal?(data)
     end
   end
 
@@ -67,33 +72,42 @@ class ExcelTable
     @headers.include?(col_name) || super
   end
 
-  def exclude_total_rows
-    @xls.each_with_index do |row, index|
-      if row.join.downcase.include?('total') || row.join.downcase.include?('subtotal')
-        @xls.delete_row(index + 1)
-      end
+  def contains_total_or_subtotal?(row_data)
+    row_data.any? { |cell_value| cell_value.to_s.downcase.include?("total") || cell_value.to_s.downcase.include?("subtotal") }
+  end
+
+  def +(other_table)
+    unless other_table.headers == @headers
+      puts "Headers of the tables are not the same. Tables cannot be unioned."
+      return
     end
-  end
-
-  def self.union(table1, table2)
-    raise ArgumentError, "Header mismatch" unless table1.headers == table2.headers
-
-    new_table = table1.clone
-    new_table.instance_variable_set(:@xls, table1.xls + table2.xls[1..-1])
-    new_table
-  end
-
-  def self.subtract(table1, table2)
-    raise ArgumentError, "Header mismatch" unless table1.headers == table2.headers
-
-    new_table = table1.clone
-    table2.each do |row|
-      new_table.xls.delete_if { |r| r == row.values }
+    new_table_data = []
+    (2..@xls.last_row).each do |row_index|
+      row_data = @xls.row(row_index)
+      new_table_data << row_data unless contains_total_or_subtotal?(row_data)
     end
-    new_table
+    (2..other_table.xls.last_row).each do |row_index|
+      row_data = other_table.xls.row(row_index)
+      new_table_data << row_data unless contains_total_or_subtotal?(row_data)
+    end
+    new_table_data
   end
 
-  def map(&block)
+  def -(other_table)
+    unless other_table.headers == @headers
+      puts "Headers of the tables are not the same. Tables cannot be subtracted."
+      return
+    end
+    new_table_data = []
+    (2..@xls.last_row).each do |row_index|
+      row_data = @xls.row(row_index)
+      next if contains_total_or_subtotal?(row_data) || other_table.to_2d_array[row_index] === row_data
+      new_table_data << row_data
+    end
+    new_table_data
+  end
+
+  def map
     result = []
     each do |row|
       result << yield(row)
@@ -101,7 +115,7 @@ class ExcelTable
     result
   end
 
-  def select(&block)
+  def select
     result = []
     each do |row|
       result << row if yield(row)
@@ -109,7 +123,7 @@ class ExcelTable
     result
   end
 
-  def reduce(initial_value, &block)
+  def reduce(initial_value)
     accumulator = initial_value
     each do |row|
       accumulator = yield(accumulator, row)
@@ -122,5 +136,14 @@ end
 class Array
   def avg
     sum / size.to_f
+  end
+
+  def method_missing(method_name, *args)
+    data = method_name.to_s
+    if self.include?(data)
+      self.index(data)
+    else
+      super
+    end
   end
 end
