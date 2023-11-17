@@ -8,60 +8,76 @@ class ExcelTable
 
   def initialize(path)
     @xls = Roo::Spreadsheet.open(path)
-    @headers = @xls.row(1)
+    @headers = find_headers
+  end
+
+  def find_headers
+    headers_row = 1
+    headers_row += 1 while @xls.row(headers_row).compact.empty?
+    @xls.row(headers_row)
+  end
+
+  def find_first_non_empty_row
+    row_index = 1
+    row_index += 1 while @xls.row(row_index).compact.empty?
+    row_index
+  end
+
+  def first_non_empty_column
+    col_index = 1
+    col_index += 1 while @xls.column(col_index).compact.empty?
+    col_index
+  end
+
+  def is_empty_row?(row_data)
+    row_data.compact.empty?
   end
 
   def to_2d_array
     data = []
-    data << @headers
-    (2..@xls.last_row).each do |row_index|
+    (find_first_non_empty_row..@xls.last_row).each do |row_index|
       row_data = @xls.row(row_index)
+      next if is_empty_row?(row_data)
       data << row_data unless contains_total_or_subtotal?(row_data)
     end
     data
   end
 
   def row(index)
-    data = @xls.row(index + 1)
-    return nil if contains_total_or_subtotal?(data)
+    data = @xls.row(find_first_non_empty_row + index)
+    return nil if contains_total_or_subtotal?(data) || is_empty_row?(data)
     Hash[@headers.zip(data)]
   end
 
   def each
-    (2..@xls.last_row).each do |row_index|
-      data = @xls.row(row_index)
+    (find_first_non_empty_row..@xls.last_row).each do |row_index|
+      data = @xls.row(row_index + 1)
+      next if is_empty_row?(data)
       yield Hash[@headers.zip(data)] unless contains_total_or_subtotal?(data)
     end
   end
 
-  def [](key)
-    if key.is_a? String
-      col_index = @headers.index(key)
-      return nil if col_index.nil?
-      @xls.column(col_index + 1)[1..-1]
-    else
-      raise ArgumentError, "Invalid key type. Use column name as a String."
+  def [](column_name)
+    column_index = @headers.index(column_name)
+    return nil if column_index.nil?
+    ((find_first_non_empty_row + 1)..@xls.last_row).map do |row_index|
+      row_data = @xls.row(row_index)
+      next if is_empty_row?(row_data)
+      row_data[column_index]
     end
   end
 
-  def []=(key, index, value)
-    if key.is_a? String
-      col_index = @headers.index(key)
-      if col_index
-        @xls.set(index + 1, col_index + 1, value)
-      else
-        raise ArgumentError, "Column '#{key}' not found in headers."
-      end
-    else
-      raise ArgumentError, "Invalid key type. Use column name as a String."
-    end
+  def []=(column_name, row_index, value)
+    column_index = @headers.index(column_name)
+    return nil if column_index.nil?
+    @xls.set(row_index + find_first_non_empty_row, column_index + first_non_empty_column, value)
   end
 
   def method_missing(method_name, *args)
     col_name = method_name.to_s
     if @headers.include?(col_name)
       col_index = @headers.index(col_name)
-      @xls.column(col_index + 1)[1..-1]
+      @xls.column(col_index + first_non_empty_column)[1..-1]
     else
       super
     end
@@ -77,34 +93,43 @@ class ExcelTable
   end
 
   def +(other_table)
-    unless other_table.headers == @headers
-      puts "Headers of the tables are not the same. Tables cannot be unioned."
-      return
-    end
-    new_table_data = []
-    (2..@xls.last_row).each do |row_index|
+    return puts "Headers of the tables are not the same. Tables cannot be added." unless other_table.headers == @headers
+    data = []
+    (find_first_non_empty_row..@xls.last_row).each do |row_index|
       row_data = @xls.row(row_index)
-      new_table_data << row_data unless contains_total_or_subtotal?(row_data)
+      data << row_data unless contains_total_or_subtotal?(row_data)
     end
-    (2..other_table.xls.last_row).each do |row_index|
+    ((other_table.find_first_non_empty_row+1)..other_table.xls.last_row).each do |row_index|
       row_data = other_table.xls.row(row_index)
-      new_table_data << row_data unless contains_total_or_subtotal?(row_data)
+      data << row_data unless contains_total_or_subtotal?(row_data)
     end
-    new_table_data
+    data
   end
 
   def -(other_table)
-    unless other_table.headers == @headers
-      puts "Headers of the tables are not the same. Tables cannot be subtracted."
-      return
-    end
-    new_table_data = []
-    (2..@xls.last_row).each do |row_index|
+    return puts "Headers of the tables are not the same. Tables cannot be subtracted." unless other_table.headers == @headers
+    data = []
+    other_table_index = other_table.find_first_non_empty_row
+    (find_first_non_empty_row..@xls.last_row).each do |row_index|
       row_data = @xls.row(row_index)
-      next if contains_total_or_subtotal?(row_data) || other_table.to_2d_array[row_index] === row_data
-      new_table_data << row_data
+      next if contains_total_or_subtotal?(row_data) || other_table.to_2d_array[other_table_index+1] === row_data
+      other_table_index += 1
+      data << row_data
     end
-    new_table_data
+    data
+  end
+
+end
+
+class Array
+
+  def avg
+    sum / size.to_f
+  end
+
+  def method_missing(method_name, *args)
+    data = method_name.to_s
+    self.include?(data) ? self.index(data) : super
   end
 
   def map
@@ -131,19 +156,4 @@ class ExcelTable
     accumulator
   end
 
-end
-
-class Array
-  def avg
-    sum / size.to_f
-  end
-
-  def method_missing(method_name, *args)
-    data = method_name.to_s
-    if self.include?(data)
-      self.index(data)
-    else
-      super
-    end
-  end
 end
