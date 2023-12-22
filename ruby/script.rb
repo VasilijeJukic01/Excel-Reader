@@ -132,28 +132,4 @@ class Array
     self.include?(data) ? self.index(data) : super
   end
 
-  def map
-    result = []
-    each do |row|
-      result << yield(row)
-    end
-    result
-  end
-
-  def select
-    result = []
-    each do |row|
-      result << row if yield(row)
-    end
-    result
-  end
-
-  def reduce(initial_value)
-    accumulator = initial_value
-    each do |row|
-      accumulator = yield(accumulator, row)
-    end
-    accumulator
-  end
-
 end
